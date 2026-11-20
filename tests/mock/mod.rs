@@ -160,13 +160,16 @@ impl FakeInstance {
     }
 
     /// Signs `public_key_pem` into a client certificate, same as `generateEphemeralCert`.
-    fn client_cert(&self, public_key_pem: &str) -> String {
+    fn client_cert(&self, public_key_pem: &str, validity: Option<time::Duration>) -> String {
         let public_key = SubjectPublicKeyInfo::from_pem(public_key_pem).unwrap();
         let mut params = CertificateParams::default();
         params.distinguished_name.push(DnType::CommonName, "client");
         let now = OffsetDateTime::now_utc();
-        params.not_before = now - time::Duration::minutes(1);
-        params.not_after = now + self.client_cert_validity;
+        params.not_before = now - time::Duration::minutes(2);
+        params.not_after = match validity {
+            Some(validity) => now + validity,
+            None => now + self.client_cert_validity,
+        };
         params
             .signed_by(&public_key, &self.ca.issuer)
             .unwrap()
@@ -210,6 +213,9 @@ struct AdminState {
     connect_settings_errors: VecDeque<u16>,
     /// HTTP status codes to return before the next successful `generateEphemeralCert` responses.
     ephemeral_cert_errors: VecDeque<u16>,
+    /// The validity of the next client certificates. A negative value makes an expired
+    /// certificate.
+    cert_validities: VecDeque<time::Duration>,
 }
 
 /// A fake Cloud SQL Admin API on a free local port. Same as `NewSQLAdminService` in the Go
@@ -281,6 +287,17 @@ impl FakeAdminApi {
         instance
     }
 
+    /// Sets the validity in seconds of the next client certificates. A negative value
+    /// makes an expired certificate.
+    pub fn next_cert_validities(&self, seconds: &[i64]) {
+        let validities = seconds.iter().map(|s| time::Duration::seconds(*s));
+        self.state
+            .lock()
+            .unwrap()
+            .cert_validities
+            .extend(validities);
+    }
+
     pub fn calls<T>(&self, f: impl FnOnce(&Calls) -> T) -> T {
         f(&self.state.lock().unwrap().calls)
     }
@@ -319,19 +336,22 @@ async fn handle(
     if path == format!("{prefix}:generateEphemeralCert") {
         let body = request.into_body().collect().await.unwrap().to_bytes();
         let body: Value = serde_json::from_slice(&body).unwrap();
-        let error = {
+        let (error, validity) = {
             let mut state = state.lock().unwrap();
             state.calls.ephemeral_cert += 1;
             state.calls.access_token = body["access_token"]
                 .as_str()
                 .filter(|token| !token.is_empty())
                 .map(str::to_owned);
-            state.ephemeral_cert_errors.pop_front()
+            (
+                state.ephemeral_cert_errors.pop_front(),
+                state.cert_validities.pop_front(),
+            )
         };
         if let Some(status) = error {
             return Ok(error_response(status));
         }
-        let cert = instance.client_cert(body["public_key"].as_str().unwrap());
+        let cert = instance.client_cert(body["public_key"].as_str().unwrap(), validity);
         return Ok(json_response(
             StatusCode::OK,
             json!({ "ephemeralCert": { "cert": cert } }),

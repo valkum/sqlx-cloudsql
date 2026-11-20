@@ -478,3 +478,21 @@ async fn ca_rotation_evicts_instance_and_next_connect_works() {
     ping(&mut connector.connect(&name).await.unwrap()).await;
     assert_eq!(admin.calls(|c| c.connect_settings), 2);
 }
+
+/// `TestDialRefreshesExpiredCertificates` in lazy mode.
+#[tokio::test]
+async fn lazy_refreshes_expired_certificate() {
+    let (admin, instance) = FakeAdminApi::start(instance()).await;
+    admin.next_cert_validities(&[-60]);
+    let _proxy = FakeServerProxy::start(&instance, Backend::Echo).await;
+    let connector = connector(&admin, |b| b).await;
+
+    ping(
+        &mut connector
+            .connect(&instance.connection_name())
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(admin.calls(|c| c.ephemeral_cert), 2);
+}
