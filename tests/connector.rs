@@ -517,3 +517,22 @@ async fn refresh_ahead_refreshes_expired_certificate() {
     .await;
     assert!(admin.calls(|c| c.ephemeral_cert) >= 2);
 }
+
+/// `TestConnectionInfo`: the private IP with its `PRIVATE_SERVICES_ACCESS` DNS name.
+#[tokio::test]
+async fn connects_to_private_ip() {
+    let mut instance =
+        instance().with_dns_mapping("abc.my-region.sql-psa.goog.", "PRIVATE_SERVICES_ACCESS");
+    instance.public_ip = None;
+    instance.private_ip = Some("127.0.0.1".into());
+    let (admin, instance) = FakeAdminApi::start(instance).await;
+    let _proxy = FakeServerProxy::start(&instance, Backend::Echo).await;
+    let name = instance.connection_name();
+
+    let connector_private = connector(&admin, |b| b.ip_type(IpType::Private)).await;
+    ping(&mut connector_private.connect(&name).await.unwrap()).await;
+
+    let connector_public = connector(&admin, |b| b.ip_type(IpType::Public)).await;
+    let error = connector_public.connect(&name).await.unwrap_err();
+    assert!(matches!(error, Error::Config(_)), "{error}");
+}

@@ -80,8 +80,9 @@ pub struct FakeInstance {
     pub database_version: String,
     pub backend_type: String,
     pub public_ip: Option<String>,
-    /// The DNS name in `dnsNames`, for the `PUBLIC` connection type.
-    pub dns_name: Option<String>,
+    pub private_ip: Option<String>,
+    /// The `dnsNames` entries: the name as the API returns it, and the connection type.
+    pub dns_names: Vec<(String, String)>,
     pub server_name: ServerName,
     pub client_cert_validity: Duration,
     /// Signs the server certificate. The Admin API returns `ca` as the server CA.
@@ -99,7 +100,8 @@ impl FakeInstance {
             database_version: "POSTGRES_17".into(),
             backend_type: "SECOND_GEN".into(),
             public_ip: Some("127.0.0.1".into()),
-            dns_name: None,
+            private_ip: None,
+            dns_names: Vec::new(),
             server_name: ServerName::LegacyCn(format!("{project}:{name}")),
             client_cert_validity: Duration::from_secs(60 * 60),
             server_signer: ca.clone(),
@@ -114,9 +116,14 @@ impl FakeInstance {
     }
 
     /// A CAS instance: the server certificate has `dns_name` as SAN, with a trailing dot.
-    pub fn with_dns_name(mut self, dns_name: &str) -> Self {
-        self.dns_name = Some(dns_name.into());
-        self.server_name = ServerName::DnsSan(format!("{dns_name}."));
+    pub fn with_dns_name(self, dns_name: &str) -> Self {
+        self.with_dns_mapping(&format!("{dns_name}."), "PUBLIC")
+    }
+
+    /// Adds a `dnsNames` entry, and makes it the SAN of the server certificate.
+    pub fn with_dns_mapping(mut self, name: &str, connection_type: &str) -> Self {
+        self.dns_names.push((name.into(), connection_type.into()));
+        self.server_name = ServerName::DnsSan(format!("{}.", name.trim_end_matches('.')));
         self
     }
 
@@ -131,18 +138,21 @@ impl FakeInstance {
     }
 
     fn connect_settings(&self) -> Value {
-        let ip_addresses: Vec<Value> = self
-            .public_ip
-            .iter()
-            .map(|ip| json!({ "type": "PRIMARY", "ipAddress": ip }))
-            .collect();
+        let ip_addresses: Vec<Value> =
+            [("PRIMARY", &self.public_ip), ("PRIVATE", &self.private_ip)]
+                .into_iter()
+                .filter_map(|(kind, ip)| {
+                    ip.as_ref()
+                        .map(|ip| json!({ "type": kind, "ipAddress": ip }))
+                })
+                .collect();
         let dns_names: Vec<Value> = self
-            .dns_name
+            .dns_names
             .iter()
-            .map(|name| {
+            .map(|(name, connection_type)| {
                 json!({
-                    "name": format!("{name}."),
-                    "connectionType": "PUBLIC",
+                    "name": name,
+                    "connectionType": connection_type,
                     "dnsScope": "INSTANCE",
                 })
             })
