@@ -496,3 +496,24 @@ async fn lazy_refreshes_expired_certificate() {
     .await;
     assert_eq!(admin.calls(|c| c.ephemeral_cert), 2);
 }
+
+/// `TestDialRefreshesExpiredCertificates` in refresh-ahead mode.
+#[tokio::test]
+async fn refresh_ahead_refreshes_expired_certificate() {
+    let (admin, instance) = FakeAdminApi::start(instance()).await;
+    admin.next_cert_validities(&[-60]);
+    let _proxy = FakeServerProxy::start(&instance, Backend::Echo).await;
+    let connector = connector(&admin, |b| {
+        b.refresh_strategy(RefreshStrategy::RefreshAhead)
+    })
+    .await;
+
+    ping(
+        &mut connector
+            .connect(&instance.connection_name())
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(admin.calls(|c| c.ephemeral_cert) >= 2);
+}
