@@ -560,3 +560,20 @@ async fn connects_to_psc_dns_name_with_trailing_dot() {
     )
     .await;
 }
+
+/// `TestRefreshPSCAutoDNS`.
+#[tokio::test]
+async fn connects_to_psc_dns_name_without_trailing_dot() {
+    let instance = psc_instance().with_dns_mapping("localhost", "PRIVATE_SERVICE_CONNECT");
+    let (admin, instance) = FakeAdminApi::start(instance).await;
+    let _proxy = FakeServerProxy::start(&instance, Backend::Echo).await;
+    let connector = connector(&admin, |b| b.ip_type(IpType::Psc)).await;
+
+    ping(
+        &mut connector
+            .connect(&instance.connection_name())
+            .await
+            .unwrap(),
+    )
+    .await;
+}
