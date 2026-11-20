@@ -438,3 +438,21 @@ async fn iam_token_error_is_retryable_auth_error() {
     assert!(error.is_retryable());
     assert_eq!(admin.calls(|c| c.ephemeral_cert), 0);
 }
+
+/// `TestDialerChecksSubjectAlternativeNameAndFallsBackToCN`.
+#[tokio::test]
+async fn falls_back_to_common_name_when_no_san_matches() {
+    let mut instance = instance().with_dns_name("abc.my-region.sql.goog");
+    instance.server_name = ServerName::LegacyCn("my-project:my-instance".into());
+    let (admin, instance) = FakeAdminApi::start(instance).await;
+    let _proxy = FakeServerProxy::start(&instance, Backend::Echo).await;
+    let connector = connector(&admin, |b| b).await;
+
+    ping(
+        &mut connector
+            .connect(&instance.connection_name())
+            .await
+            .unwrap(),
+    )
+    .await;
+}
