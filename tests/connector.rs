@@ -456,3 +456,25 @@ async fn falls_back_to_common_name_when_no_san_matches() {
     )
     .await;
 }
+
+/// `TestDialerRefreshesAfterRotateCACerts` and `TestDialerRemovesInvalidInstancesFromCache`:
+/// after a CA rotation the handshake fails and the instance leaves the cache. The next
+/// connect gets the new CA and works.
+#[tokio::test]
+async fn ca_rotation_evicts_instance_and_next_connect_works() {
+    let (admin, instance) = FakeAdminApi::start(instance()).await;
+    let proxy = FakeServerProxy::start(&instance, Backend::Echo).await;
+    let connector = connector(&admin, |b| b).await;
+    let name = instance.connection_name();
+    ping(&mut connector.connect(&name).await.unwrap()).await;
+
+    let rotated = admin.set_instance(instance.with_new_ca());
+    drop(proxy);
+    let _proxy = FakeServerProxy::start(&rotated, Backend::Echo).await;
+
+    let error = connector.connect(&name).await.unwrap_err();
+    assert!(matches!(error, Error::Handshake { .. }), "{error}");
+
+    ping(&mut connector.connect(&name).await.unwrap()).await;
+    assert_eq!(admin.calls(|c| c.connect_settings), 2);
+}

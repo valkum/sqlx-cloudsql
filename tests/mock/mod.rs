@@ -72,6 +72,7 @@ pub enum ServerName {
 }
 
 /// A fake Cloud SQL instance. Same as `FakeCSQLInstance` in the Go connector.
+#[derive(Clone)]
 pub struct FakeInstance {
     pub project: String,
     pub region: String,
@@ -117,6 +118,16 @@ impl FakeInstance {
         self.dns_name = Some(dns_name.into());
         self.server_name = ServerName::DnsSan(format!("{dns_name}."));
         self
+    }
+
+    /// The same instance with a new server CA, same as a CA rotation.
+    pub fn with_new_ca(&self) -> Self {
+        let ca = Arc::new(Ca::new("Rotated Fake Cloud SQL Server CA"));
+        Self {
+            server_signer: ca.clone(),
+            ca,
+            ..self.clone()
+        }
     }
 
     fn connect_settings(&self) -> Value {
@@ -206,6 +217,8 @@ struct AdminState {
 pub struct FakeAdminApi {
     pub url: String,
     state: Arc<Mutex<AdminState>>,
+    /// The instance that the API returns. Tests can replace it.
+    current: Arc<Mutex<Arc<FakeInstance>>>,
     task: JoinHandle<()>,
 }
 
@@ -215,13 +228,14 @@ impl FakeAdminApi {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let state = Arc::new(Mutex::new(AdminState::default()));
+        let current = Arc::new(Mutex::new(instance.clone()));
 
         let task = tokio::spawn({
-            let (instance, state) = (instance.clone(), state.clone());
+            let (current, state) = (current.clone(), state.clone());
             async move {
                 loop {
                     let (stream, _) = listener.accept().await.unwrap();
-                    let (instance, state) = (instance.clone(), state.clone());
+                    let (instance, state) = (current.clone(), state.clone());
                     let service =
                         service_fn(move |request| handle(request, instance.clone(), state.clone()));
                     tokio::spawn(
@@ -231,7 +245,15 @@ impl FakeAdminApi {
             }
         });
 
-        (Self { url, state, task }, instance)
+        (
+            Self {
+                url,
+                state,
+                current,
+                task,
+            },
+            instance,
+        )
     }
 
     /// Makes the next `connectSettings` calls fail with these HTTP status codes.
@@ -252,6 +274,13 @@ impl FakeAdminApi {
             .extend(statuses);
     }
 
+    /// Replaces the instance that the API returns, for example after a CA rotation.
+    pub fn set_instance(&self, instance: FakeInstance) -> Arc<FakeInstance> {
+        let instance = Arc::new(instance);
+        *self.current.lock().unwrap() = instance.clone();
+        instance
+    }
+
     pub fn calls<T>(&self, f: impl FnOnce(&Calls) -> T) -> T {
         f(&self.state.lock().unwrap().calls)
     }
@@ -265,9 +294,10 @@ impl Drop for FakeAdminApi {
 
 async fn handle(
     request: Request<Incoming>,
-    instance: Arc<FakeInstance>,
+    current: Arc<Mutex<Arc<FakeInstance>>>,
     state: Arc<Mutex<AdminState>>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
+    let instance = current.lock().unwrap().clone();
     let path = request.uri().path().to_owned();
     let prefix = format!(
         "/v1/projects/{}/instances/{}",
@@ -361,7 +391,7 @@ impl FakeServerProxy {
                 .unwrap();
         let acceptor = TlsAcceptor::from(Arc::new(config));
 
-        let listener = TcpListener::bind("127.0.0.1:3307").await.unwrap();
+        let listener = bind_with_retries("127.0.0.1:3307").await;
         let backend = Arc::new(backend);
         let task = tokio::spawn(async move {
             loop {
@@ -394,4 +424,19 @@ impl Drop for FakeServerProxy {
     fn drop(&mut self) {
         self.task.abort();
     }
+}
+
+/// Binds `addr`, and tries again while an aborted proxy task still holds the port. Same as
+/// `startListenerWithRetries` in the Go connector.
+async fn bind_with_retries(addr: &str) -> TcpListener {
+    for _ in 0..100 {
+        match TcpListener::bind(addr).await {
+            Ok(listener) => return listener,
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => panic!("failed to bind {addr}: {error}"),
+        }
+    }
+    panic!("{addr} is still in use");
 }
