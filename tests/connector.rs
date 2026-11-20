@@ -577,3 +577,22 @@ async fn connects_to_psc_dns_name_without_trailing_dot() {
     )
     .await;
 }
+
+/// `TestConnectionInfo` for an older PSC instance that has only the legacy `dnsName`.
+#[tokio::test]
+async fn connects_to_psc_with_legacy_dns_name() {
+    let mut instance = psc_instance();
+    instance.legacy_dns_name = Some("localhost.".into());
+    instance.server_name = ServerName::DnsSan("localhost.".into());
+    let (admin, instance) = FakeAdminApi::start(instance).await;
+    let _proxy = FakeServerProxy::start(&instance, Backend::Echo).await;
+    let connector = connector(&admin, |b| b.ip_type(IpType::Psc)).await;
+
+    ping(
+        &mut connector
+            .connect(&instance.connection_name())
+            .await
+            .unwrap(),
+    )
+    .await;
+}
