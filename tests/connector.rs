@@ -596,3 +596,17 @@ async fn connects_to_psc_with_legacy_dns_name() {
     )
     .await;
 }
+
+/// `TestConnectionInfo`: no PSC address if PSC is not enabled.
+#[tokio::test]
+async fn psc_disabled_is_a_config_error() {
+    let instance = instance().with_dns_mapping("localhost.", "PRIVATE_SERVICE_CONNECT");
+    let (admin, instance) = FakeAdminApi::start(instance).await;
+    let connector = connector(&admin, |b| b.ip_type(IpType::Psc)).await;
+
+    let error = connector
+        .connect(&instance.connection_name())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::Config(_)), "{error}");
+}
