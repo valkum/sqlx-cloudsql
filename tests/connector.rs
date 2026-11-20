@@ -397,3 +397,44 @@ async fn does_not_retry_ephemeral_cert_4xx() {
     );
     assert_eq!(admin.calls(|c| c.ephemeral_cert), 1);
 }
+
+#[derive(Debug)]
+struct FailingIamToken;
+
+impl CredentialsProvider for FailingIamToken {
+    async fn headers(
+        &self,
+        _extensions: Extensions,
+    ) -> Result<CacheableResource<HeaderMap>, CredentialsError> {
+        Err(CredentialsError::from_msg(true, "fake token error"))
+    }
+
+    async fn universe_domain(&self) -> Option<String> {
+        None
+    }
+}
+
+impl AccessTokenCredentialsProvider for FailingIamToken {
+    async fn access_token(&self) -> Result<AccessToken, CredentialsError> {
+        Err(CredentialsError::from_msg(true, "fake token error"))
+    }
+}
+
+/// `TestRefreshWithIAMAuthErrors`.
+#[tokio::test]
+async fn iam_token_error_is_retryable_auth_error() {
+    let (admin, instance) = FakeAdminApi::start(instance()).await;
+    let connector = connector(&admin, |b| {
+        b.iam_authn(true)
+            .iam_login_credentials(AccessTokenCredentials::from(FailingIamToken))
+    })
+    .await;
+
+    let error = connector
+        .engine_version(&instance.connection_name())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::Auth(_)), "{error}");
+    assert!(error.is_retryable());
+    assert_eq!(admin.calls(|c| c.ephemeral_cert), 0);
+}
