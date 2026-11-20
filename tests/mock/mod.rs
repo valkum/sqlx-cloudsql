@@ -81,6 +81,7 @@ pub struct FakeInstance {
     pub backend_type: String,
     pub public_ip: Option<String>,
     pub private_ip: Option<String>,
+    pub psc_enabled: bool,
     /// The `dnsNames` entries: the name as the API returns it, and the connection type.
     pub dns_names: Vec<(String, String)>,
     pub server_name: ServerName,
@@ -101,6 +102,7 @@ impl FakeInstance {
             backend_type: "SECOND_GEN".into(),
             public_ip: Some("127.0.0.1".into()),
             private_ip: None,
+            psc_enabled: false,
             dns_names: Vec::new(),
             server_name: ServerName::LegacyCn(format!("{project}:{name}")),
             client_cert_validity: Duration::from_secs(60 * 60),
@@ -166,6 +168,7 @@ impl FakeInstance {
             "databaseVersion": self.database_version,
             "backendType": self.backend_type,
             "dnsNames": dns_names,
+            "pscEnabled": self.psc_enabled,
         })
     }
 

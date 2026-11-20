@@ -536,3 +536,27 @@ async fn connects_to_private_ip() {
     let error = connector_public.connect(&name).await.unwrap_err();
     assert!(matches!(error, Error::Config(_)), "{error}");
 }
+
+fn psc_instance() -> FakeInstance {
+    let mut instance = instance();
+    instance.public_ip = None;
+    instance.psc_enabled = true;
+    instance
+}
+
+/// `TestRefreshPSCAutoDNS_WithTrailingDots`.
+#[tokio::test]
+async fn connects_to_psc_dns_name_with_trailing_dot() {
+    let instance = psc_instance().with_dns_mapping("localhost.", "PRIVATE_SERVICE_CONNECT");
+    let (admin, instance) = FakeAdminApi::start(instance).await;
+    let _proxy = FakeServerProxy::start(&instance, Backend::Echo).await;
+    let connector = connector(&admin, |b| b.ip_type(IpType::Psc)).await;
+
+    ping(
+        &mut connector
+            .connect(&instance.connection_name())
+            .await
+            .unwrap(),
+    )
+    .await;
+}
