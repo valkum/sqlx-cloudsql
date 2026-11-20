@@ -373,3 +373,27 @@ async fn retries_ephemeral_cert_5xx() {
         .unwrap();
     assert_eq!(admin.calls(|c| c.ephemeral_cert), 2);
 }
+
+/// `TestRefreshWithFailedEphemeralCertCall`.
+#[tokio::test]
+async fn does_not_retry_ephemeral_cert_4xx() {
+    let (admin, instance) = FakeAdminApi::start(instance()).await;
+    admin.fail_ephemeral_cert(&[403]);
+    let connector = connector(&admin, |b| b).await;
+
+    let error = connector
+        .engine_version(&instance.connection_name())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            Error::Api {
+                retryable: false,
+                ..
+            }
+        ),
+        "{error}"
+    );
+    assert_eq!(admin.calls(|c| c.ephemeral_cert), 1);
+}
