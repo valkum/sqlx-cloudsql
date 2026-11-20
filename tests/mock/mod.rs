@@ -197,6 +197,8 @@ struct AdminState {
     calls: Calls,
     /// HTTP status codes to return before the next successful `connectSettings` responses.
     connect_settings_errors: VecDeque<u16>,
+    /// HTTP status codes to return before the next successful `generateEphemeralCert` responses.
+    ephemeral_cert_errors: VecDeque<u16>,
 }
 
 /// A fake Cloud SQL Admin API on a free local port. Same as `NewSQLAdminService` in the Go
@@ -241,6 +243,15 @@ impl FakeAdminApi {
             .extend(statuses);
     }
 
+    /// Makes the next `generateEphemeralCert` calls fail with these HTTP status codes.
+    pub fn fail_ephemeral_cert(&self, statuses: &[u16]) {
+        self.state
+            .lock()
+            .unwrap()
+            .ephemeral_cert_errors
+            .extend(statuses);
+    }
+
     pub fn calls<T>(&self, f: impl FnOnce(&Calls) -> T) -> T {
         f(&self.state.lock().unwrap().calls)
     }
@@ -278,13 +289,17 @@ async fn handle(
     if path == format!("{prefix}:generateEphemeralCert") {
         let body = request.into_body().collect().await.unwrap().to_bytes();
         let body: Value = serde_json::from_slice(&body).unwrap();
-        {
+        let error = {
             let mut state = state.lock().unwrap();
             state.calls.ephemeral_cert += 1;
             state.calls.access_token = body["access_token"]
                 .as_str()
                 .filter(|token| !token.is_empty())
                 .map(str::to_owned);
+            state.ephemeral_cert_errors.pop_front()
+        };
+        if let Some(status) = error {
+            return Ok(error_response(status));
         }
         let cert = instance.client_cert(body["public_key"].as_str().unwrap());
         return Ok(json_response(

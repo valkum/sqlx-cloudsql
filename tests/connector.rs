@@ -359,3 +359,17 @@ async fn new_iam_token_refreshes_certificate() {
         Some("token-1")
     );
 }
+
+/// `TestRefreshRetries50xResponses` for `generateEphemeralCert`.
+#[tokio::test]
+async fn retries_ephemeral_cert_5xx() {
+    let (admin, instance) = FakeAdminApi::start(instance()).await;
+    admin.fail_ephemeral_cert(&[500]);
+    let connector = connector(&admin, |b| b).await;
+
+    connector
+        .engine_version(&instance.connection_name())
+        .await
+        .unwrap();
+    assert_eq!(admin.calls(|c| c.ephemeral_cert), 2);
+}
